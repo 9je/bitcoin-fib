@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FreeBitco.in Fibonacci Auto-Bet
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  Automate bets with Fibonacci progression on FreeBitco.in "BET HI"
 // @author       you
 // @match        https://freebitco.in/*
@@ -30,6 +30,7 @@
 
     // Profit tracking
     let startingBalance = 0;
+    let sessionActive = false;
 
     // --- UI Elements ---
     function injectUI() {
@@ -83,8 +84,8 @@
 
             <div style="margin-top:10px;padding:8px;background:#f9f9f9;border-radius:3px;">
                 <div style="display:flex;justify-content:space-between;margin-bottom:6px;align-items:center;">
-                    <strong style="font-size:11px;">Balance Chart (<span id="fib_point_count">0</span> bets)</strong>
-                    <button id="fib_clear_chart" style="font-size:10px;padding:2px 6px;background:#666;color:white;border:none;border-radius:2px;cursor:pointer;">Clear</button>
+                    <strong style="font-size:11px;">Balance Chart (<span id="fib_point_count">0</span> pts)</strong>
+                    <button id="fib_reset_session" style="font-size:10px;padding:3px 8px;background:#ff9800;color:white;border:none;border-radius:2px;cursor:pointer;font-weight:bold;">Reset Session</button>
                 </div>
                 <canvas id="fib_balance_chart" width="280" height="140"></canvas>
 
@@ -122,7 +123,7 @@
 
         document.getElementById('fib_start').addEventListener('click', startAutoBet);
         document.getElementById('fib_stop').addEventListener('click', stopAutoBet);
-        document.getElementById('fib_clear_chart').addEventListener('click', clearChart);
+        document.getElementById('fib_reset_session').addEventListener('click', resetSession);
 
         // Initialize chart
         initChart();
@@ -262,7 +263,8 @@
         }
     }
 
-    function clearChart() {
+    function resetSession() {
+        // Clear chart data
         chartData.length = 0;
         betCounter = 0;
         if (balanceChart) {
@@ -270,11 +272,18 @@
             document.getElementById('fib_point_count').textContent = '0';
         }
 
-        // Reset profit tracker
+        // Reset profit tracker to current balance
         startingBalance = getBalance();
-        updateProfitTracker(startingBalance);
+        let valueElement = document.getElementById('fib_profit_value');
+        let percentElement = document.getElementById('fib_profit_percent');
+        valueElement.textContent = '-';
+        valueElement.style.color = '#666';
+        percentElement.textContent = '-';
+        percentElement.style.color = '#666';
 
-        console.log('Chart cleared');
+        sessionActive = false;
+
+        console.log('Session reset - Chart and profit tracker cleared');
     }
 
     // --- Fibonacci Helpers ---
@@ -480,12 +489,14 @@
         // Setup observer before starting
         setupResultObserver();
 
-        // Initialize starting balance and profit tracker
-        startingBalance = getBalance();
-        updateProfitTracker(startingBalance);
-
-        // Add initial balance to chart
-        updateChart(startingBalance);
+        // Initialize session if not active
+        if (!sessionActive) {
+            startingBalance = getBalance();
+            updateProfitTracker(startingBalance);
+            updateChart(startingBalance);
+            sessionActive = true;
+            console.log('New session started with balance:', startingBalance.toFixed(8));
+        }
 
         // Place first bet after checking balance
         setTimeout(() => {
@@ -514,6 +525,7 @@
         }
 
         betInProgress = false;
+        // Note: sessionActive stays true so data persists across stop/start
     }
 
     function setStatus(msg) {
@@ -523,6 +535,7 @@
         }
     }
 
+    // --- Multiple injection attempts for reliability ---
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', injectUI);
     } else {
