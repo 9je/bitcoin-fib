@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FreeBitco.in Fibonacci Auto-Bet
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.7
 // @description  Automate bets with Fibonacci progression on FreeBitco.in "BET HI"
 // @author       you
 // @match        https://freebitco.in/*
@@ -15,6 +15,9 @@
 
     // --- Configurable base amount & selectors ---
     let baseAmount = 0.00000001;
+    let stopBalance = 0.0003;
+    let stopBalanceEnabled = false;
+    let stopOperator = '>'; // '<' or '>'
     let isRunning = false;
     let fibSeq = [baseAmount, baseAmount];
     let currentStep = 0;
@@ -40,25 +43,59 @@
         controller.style.zIndex = "9999";
         controller.style.borderRadius = "5px";
         controller.style.boxShadow = "0 2px 10px rgba(0,0,0,0.3)";
+        controller.style.minWidth = "220px";
 
         controller.innerHTML = `
-            <label>
-                Starting Amount:
-                <input type="text" id="fib_base_amount" value="${baseAmount.toFixed(8)}" style="width:110px;">
-            </label><br>
-            <button id="fib_start" style="background:#4CAF50;color:white;border:none;padding:8px 12px;margin-top:8px;cursor:pointer;border-radius:3px;">Start Auto-Bet</button>
-            <button id="fib_stop" disabled style="background:#f44336;color:white;border:none;padding:8px 12px;margin-top:8px;margin-left:5px;cursor:pointer;opacity:0.5;border-radius:3px;">Stop</button>
-            <div id="fib_status" style="margin-top:6px;color:#888;">Stopped</div>
+            <div style="margin-bottom:8px;">
+                <label>
+                    Starting Amount:
+                    <input type="text" id="fib_base_amount" value="${baseAmount.toFixed(8)}" style="width:110px;">
+                </label>
+            </div>
+
+            <div style="margin-bottom:8px;padding:8px;background:#f0f0f0;border-radius:3px;">
+                <label style="display:block;margin-bottom:4px;">
+                    <input type="checkbox" id="fib_stop_balance_enabled" style="margin-right:4px;">
+                    Stop when balance:
+                </label>
+                <div style="display:flex;gap:4px;align-items:center;">
+                    <select id="fib_stop_operator" style="padding:4px;" disabled>
+                        <option value="<">&lt; (less than)</option>
+                        <option value=">" selected>&gt; (greater than)</option>
+                    </select>
+                </div>
+                <input type="text" id="fib_stop_balance" value="${stopBalance.toFixed(8)}" style="width:110px;margin-top:4px;" disabled>
+            </div>
+
+            <button id="fib_start" style="background:#4CAF50;color:white;border:none;padding:8px 12px;cursor:pointer;border-radius:3px;width:48%;">Start</button>
+            <button id="fib_stop" disabled style="background:#f44336;color:white;border:none;padding:8px 12px;cursor:pointer;opacity:0.5;border-radius:3px;width:48%;">Stop</button>
+            <div id="fib_status" style="margin-top:6px;color:#888;font-size:12px;">Stopped</div>
         `;
 
         document.body.appendChild(controller);
         console.log('UI injected successfully');
 
+        // Event listeners
         document.getElementById('fib_base_amount').addEventListener('change', function(){
             baseAmount = parseFloat(this.value);
             fibSeq = [baseAmount, baseAmount];
             currentStep = 0;
         });
+
+        document.getElementById('fib_stop_balance_enabled').addEventListener('change', function(){
+            stopBalanceEnabled = this.checked;
+            document.getElementById('fib_stop_balance').disabled = !this.checked;
+            document.getElementById('fib_stop_operator').disabled = !this.checked;
+        });
+
+        document.getElementById('fib_stop_balance').addEventListener('change', function(){
+            stopBalance = parseFloat(this.value) || 0;
+        });
+
+        document.getElementById('fib_stop_operator').addEventListener('change', function(){
+            stopOperator = this.value;
+        });
+
         document.getElementById('fib_start').addEventListener('click', startAutoBet);
         document.getElementById('fib_stop').addEventListener('click', stopAutoBet);
     }
@@ -87,12 +124,34 @@
 
     function checkBalance(betAmount) {
         let balance = getBalance();
+
+        // Check if balance is sufficient for bet
         if (balance < betAmount) {
-            console.log(`Insufficient balance: ${balance.toFixed(8)} < ${betAmount.toFixed(8)}`);
+            console.log(`Insufficient balance for bet: ${balance.toFixed(8)} < ${betAmount.toFixed(8)}`);
             setStatus(`Stopped - Insufficient balance`);
             stopAutoBet();
             return false;
         }
+
+        // Check stop balance condition if enabled
+        if (stopBalanceEnabled) {
+            let shouldStop = false;
+            if (stopOperator === '<' && balance < stopBalance) {
+                shouldStop = true;
+                console.log(`Stop condition met: balance ${balance.toFixed(8)} < ${stopBalance.toFixed(8)}`);
+                setStatus(`Stopped - Balance below ${stopBalance.toFixed(8)}`);
+            } else if (stopOperator === '>' && balance > stopBalance) {
+                shouldStop = true;
+                console.log(`Stop condition met: balance ${balance.toFixed(8)} > ${stopBalance.toFixed(8)}`);
+                setStatus(`Stopped - Balance above ${stopBalance.toFixed(8)}`);
+            }
+
+            if (shouldStop) {
+                stopAutoBet();
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -228,7 +287,7 @@
         stopBtn.disabled = true;
         stopBtn.style.opacity = '0.5';
 
-        if (document.getElementById('fib_status').innerText.indexOf('Insufficient') === -1) {
+        if (document.getElementById('fib_status').innerText.indexOf('Stopped') === -1) {
             setStatus('Stopped');
         }
 
