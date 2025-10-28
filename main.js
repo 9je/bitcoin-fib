@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         FreeBitco.in Fibonacci Auto-Bet
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      2.3
 // @description  Automate bets with Fibonacci progression on FreeBitco.in "BET HI"
 // @author       you
 // @match        https://freebitco.in/*
 // @grant        none
+// @require      https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js
 // ==/UserScript==
 
 (function() {
@@ -21,6 +22,14 @@
     let isRunning = false;
     let fibSeq = [baseAmount, baseAmount];
     let currentStep = 0;
+
+    // Chart data
+    let balanceChart = null;
+    let chartData = [];
+    let betCounter = 0;
+
+    // Profit tracking
+    let startingBalance = 0;
 
     // --- UI Elements ---
     function injectUI() {
@@ -43,7 +52,8 @@
         controller.style.zIndex = "9999";
         controller.style.borderRadius = "5px";
         controller.style.boxShadow = "0 2px 10px rgba(0,0,0,0.3)";
-        controller.style.minWidth = "220px";
+        controller.style.minWidth = "320px";
+        controller.style.maxWidth = "400px";
 
         controller.innerHTML = `
             <div style="margin-bottom:8px;">
@@ -70,6 +80,20 @@
             <button id="fib_start" style="background:#4CAF50;color:white;border:none;padding:8px 12px;cursor:pointer;border-radius:3px;width:48%;">Start</button>
             <button id="fib_stop" disabled style="background:#f44336;color:white;border:none;padding:8px 12px;cursor:pointer;opacity:0.5;border-radius:3px;width:48%;">Stop</button>
             <div id="fib_status" style="margin-top:6px;color:#888;font-size:12px;">Stopped</div>
+
+            <div style="margin-top:10px;padding:8px;background:#f9f9f9;border-radius:3px;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:6px;align-items:center;">
+                    <strong style="font-size:11px;">Balance Chart (<span id="fib_point_count">0</span> bets)</strong>
+                    <button id="fib_clear_chart" style="font-size:10px;padding:2px 6px;background:#666;color:white;border:none;border-radius:2px;cursor:pointer;">Clear</button>
+                </div>
+                <canvas id="fib_balance_chart" width="280" height="140"></canvas>
+
+                <div id="fib_profit_tracker" style="margin-top:10px;padding:8px;background:#fff;border-radius:3px;border:1px solid #ddd;text-align:center;">
+                    <div style="font-size:10px;color:#666;margin-bottom:2px;">Session Profit/Loss</div>
+                    <div id="fib_profit_value" style="font-size:16px;font-weight:bold;color:#666;">-</div>
+                    <div id="fib_profit_percent" style="font-size:11px;color:#666;margin-top:2px;">-</div>
+                </div>
+            </div>
         `;
 
         document.body.appendChild(controller);
@@ -98,6 +122,159 @@
 
         document.getElementById('fib_start').addEventListener('click', startAutoBet);
         document.getElementById('fib_stop').addEventListener('click', stopAutoBet);
+        document.getElementById('fib_clear_chart').addEventListener('click', clearChart);
+
+        // Initialize chart
+        initChart();
+    }
+
+    // --- Chart Functions ---
+    function initChart() {
+        const ctx = document.getElementById('fib_balance_chart');
+        if (!ctx) return;
+
+        balanceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'Balance',
+                    data: chartData,
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                    borderWidth: 1.5,
+                    tension: 0,
+                    fill: true,
+                    pointRadius: 0,
+                    pointHoverRadius: 3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                animation: false,
+                parsing: false,
+                normalized: true,
+                interaction: {
+                    mode: 'nearest',
+                    axis: 'x',
+                    intersect: false
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        title: {
+                            display: true,
+                            text: 'Bet #',
+                            font: { size: 10 }
+                        },
+                        ticks: {
+                            font: { size: 9 },
+                            maxTicksLimit: 6,
+                            autoSkip: true
+                        }
+                    },
+                    y: {
+                        beginAtZero: false,
+                        title: {
+                            display: true,
+                            text: 'Balance (BTC)',
+                            font: { size: 10 }
+                        },
+                        ticks: {
+                            font: { size: 9 },
+                            callback: function(value) {
+                                return value.toFixed(8);
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    decimation: {
+                        enabled: true,
+                        algorithm: 'lttb',
+                        samples: 200,
+                        threshold: 500
+                    },
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: function(context) {
+                                return 'Bet #' + Math.round(context[0].parsed.x);
+                            },
+                            label: function(context) {
+                                return 'Balance: ' + context.parsed.y.toFixed(8) + ' BTC';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function updateChart(balance) {
+        if (!balanceChart) return;
+
+        betCounter++;
+
+        // Add data point
+        chartData.push({
+            x: betCounter,
+            y: balance
+        });
+
+        // Update point count
+        document.getElementById('fib_point_count').textContent = chartData.length;
+
+        // Update profit tracker
+        updateProfitTracker(balance);
+
+        // Update chart
+        balanceChart.update('none');
+    }
+
+    function updateProfitTracker(currentBalance) {
+        let profit = currentBalance - startingBalance;
+        let profitPercent = startingBalance > 0 ? (profit / startingBalance) * 100 : 0;
+
+        let valueElement = document.getElementById('fib_profit_value');
+        let percentElement = document.getElementById('fib_profit_percent');
+
+        // Format profit value
+        let profitText = (profit >= 0 ? '+' : '') + profit.toFixed(8) + ' BTC';
+        valueElement.textContent = profitText;
+
+        // Format percentage
+        let percentText = '(' + (profitPercent >= 0 ? '+' : '') + profitPercent.toFixed(2) + '%)';
+        percentElement.textContent = percentText;
+
+        // Color based on profit/loss
+        if (profit > 0) {
+            valueElement.style.color = '#4CAF50'; // Green
+            percentElement.style.color = '#4CAF50';
+        } else if (profit < 0) {
+            valueElement.style.color = '#f44336'; // Red
+            percentElement.style.color = '#f44336';
+        } else {
+            valueElement.style.color = '#666'; // Gray
+            percentElement.style.color = '#666';
+        }
+    }
+
+    function clearChart() {
+        chartData.length = 0;
+        betCounter = 0;
+        if (balanceChart) {
+            balanceChart.update('none');
+            document.getElementById('fib_point_count').textContent = '0';
+        }
+
+        // Reset profit tracker
+        startingBalance = getBalance();
+        updateProfitTracker(startingBalance);
+
+        console.log('Chart cleared');
     }
 
     // --- Fibonacci Helpers ---
@@ -158,6 +335,7 @@
     // --- Main Logic ---
     let betInProgress = false;
     let resultObserver = null;
+    let currentBetAmount = 0;
 
     function placeBet(amount) {
         if (!isRunning) return;
@@ -186,6 +364,7 @@
 
         betButton.click();
         betInProgress = true;
+        currentBetAmount = amount;
         setStatus(`Betting ${amount.toFixed(8)}`);
         console.log('Placed bet:', amount.toFixed(8), '| Balance:', getBalance().toFixed(8));
     }
@@ -193,8 +372,14 @@
     function handleWin() {
         if (!isRunning || !betInProgress) return;
 
+        let balance = getBalance();
+
         console.log('WIN - Resetting to base amount:', baseAmount.toFixed(8));
         setStatus('Win! Resetting...');
+
+        // Update chart with current balance
+        updateChart(balance);
+
         resetFib();
         betInProgress = false;
 
@@ -206,11 +391,17 @@
     function handleLoss() {
         if (!isRunning || !betInProgress) return;
 
+        let balance = getBalance();
+
         let previous = fibSeq[fibSeq.length-1];
         let next = nextFibStep();
         let increase = next - previous;
         console.log('LOSS - Increasing bet by:', increase.toFixed(8), '| Next bet:', next.toFixed(8));
-        setStatus(`Loss. Next bet: ${next.toFixed(8)}`);
+        setStatus(`Loss. Next: ${next.toFixed(8)}`);
+
+        // Update chart with current balance
+        updateChart(balance);
+
         betInProgress = false;
 
         setTimeout(() => {
@@ -218,16 +409,30 @@
         }, 500);
     }
 
+    function handleError() {
+        if (!isRunning || !betInProgress) return;
+
+        console.log('ERROR - Request timed out, retrying same bet:', currentBetAmount.toFixed(8));
+        setStatus('Error - Retrying...');
+        betInProgress = false;
+
+        // Don't update chart on errors, just retry
+        setTimeout(() => {
+            if (isRunning) placeBet(currentBetAmount);
+        }, 2000);
+    }
+
     function setupResultObserver() {
         let winDiv = document.getElementById('double_your_btc_bet_win');
         let loseDiv = document.getElementById('double_your_btc_bet_lose');
+        let errorDiv = document.getElementById('double_your_btc_error');
 
-        if (!winDiv || !loseDiv) {
-            console.error('Win/Loss divs not found');
+        if (!winDiv || !loseDiv || !errorDiv) {
+            console.error('Win/Loss/Error divs not found');
             return;
         }
 
-        // Observe changes to both win and lose divs
+        // Observe changes to win, lose, and error divs
         resultObserver = new MutationObserver((mutations) => {
             mutations.forEach((mutation) => {
                 if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
@@ -241,17 +446,21 @@
                         } else if (target.id === 'double_your_btc_bet_lose') {
                             console.log('Detected LOSS via MutationObserver');
                             handleLoss();
+                        } else if (target.id === 'double_your_btc_error') {
+                            console.log('Detected ERROR via MutationObserver');
+                            handleError();
                         }
                     }
                 }
             });
         });
 
-        // Observe both divs for style attribute changes
+        // Observe all three divs for style attribute changes
         resultObserver.observe(winDiv, { attributes: true, attributeFilter: ['style'] });
         resultObserver.observe(loseDiv, { attributes: true, attributeFilter: ['style'] });
+        resultObserver.observe(errorDiv, { attributes: true, attributeFilter: ['style'] });
 
-        console.log('Result observer setup complete');
+        console.log('Result observer setup complete (including error handling)');
     }
 
     // --- Control Functions ---
@@ -270,6 +479,13 @@
 
         // Setup observer before starting
         setupResultObserver();
+
+        // Initialize starting balance and profit tracker
+        startingBalance = getBalance();
+        updateProfitTracker(startingBalance);
+
+        // Add initial balance to chart
+        updateChart(startingBalance);
 
         // Place first bet after checking balance
         setTimeout(() => {
@@ -307,7 +523,6 @@
         }
     }
 
-    // --- Multiple injection attempts for reliability ---
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', injectUI);
     } else {
